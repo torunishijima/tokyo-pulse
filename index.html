@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tokyo Pulse</title>
+
+  <!-- MapLibre GL JS (CDN) -->
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 地図コンテナ -->
+  <div id="map"></div>
+
+  <!-- 情報オーバーレイ（左上） -->
+  <div id="overlay">
+    <div id="bus-count">
+      <span id="count-toei" class="count-toei">都営 — 台</span>
+      <span id="count-seibu" class="count-seibu">西武 — 台</span>
+    </div>
+    <div id="clock">--:--</div>
+  </div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

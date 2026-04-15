@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "tokyo-pulse",
+      "runtimeExecutable": "netlify",
+      "runtimeArgs": ["dev", "--port", "8889"],
+      "port": 8889
+    }
+  ]
+}
