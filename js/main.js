@@ -19,26 +19,35 @@ const OPERATOR_COLOR = {
 };
 
 /**
- * 進行方向を示す矢印（ダーツ型三角形）の ImageData を生成。
- * bearing=0 で北向き（上向き）になるよう描画する。
+ * バスアイコン（長方形＋後部Vノッチ）の ImageData を生成。
+ * bearing=0 で北向き（上＝前）になるよう描画する。
  */
-function makeArrowImageData(color, size = 20) {
+function makeBusIconImageData(color, iw = 22, ih = 44) {
   const canvas = document.createElement('canvas');
-  canvas.width  = size;
-  canvas.height = size;
+  canvas.width  = iw;
+  canvas.height = ih;
   const ctx = canvas.getContext('2d');
-  const half = size / 2;
+
+  // アイコン本体のサイズ（キャンバス内でやや余白を持たせる）
+  const pad  = 2;
+  const w    = iw - pad * 2;
+  const h    = ih - pad * 2;
+  const x    = pad;
+  const y    = pad;
+  const notch = h * 0.22; // 後部Vノッチの深さ
 
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.moveTo(half,        1);            // 先端（上）
-  ctx.lineTo(size - 2,   size - 2);     // 右下
-  ctx.lineTo(half,        size * 0.62);  // 中央くびれ
-  ctx.lineTo(2,           size - 2);    // 左下
+  ctx.moveTo(x + w / 2, y);              // 前部・先端（上中央）
+  ctx.lineTo(x + w,     y + h * 0.28);  // 右肩
+  ctx.lineTo(x + w,     y + h);         // 後部・右下
+  ctx.lineTo(x + w / 2, y + h - notch); // 後部・中央ノッチ
+  ctx.lineTo(x,         y + h);         // 後部・左下
+  ctx.lineTo(x,         y + h * 0.28);  // 左肩
   ctx.closePath();
   ctx.fill();
 
-  return ctx.getImageData(0, 0, size, size);
+  return ctx.getImageData(0, 0, iw, ih);
 }
 
 // --- 地図初期化 ---
@@ -79,8 +88,8 @@ map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-rig
 // --- 地図ロード後にレイヤーを初期化 ---
 map.on('load', () => {
   // 事業者ごとの矢印アイコンを登録
-  map.addImage('arrow-toei',  makeArrowImageData(OPERATOR_COLOR.toei));
-  map.addImage('arrow-seibu', makeArrowImageData(OPERATOR_COLOR.seibu));
+  map.addImage('arrow-toei',  makeBusIconImageData(OPERATOR_COLOR.toei));
+  map.addImage('arrow-seibu', makeBusIconImageData(OPERATOR_COLOR.seibu));
 
   // GeoJSON ソース（空で初期化）
   map.addSource(SOURCE_ID, {
@@ -104,7 +113,7 @@ map.on('load', () => {
       'icon-rotation-alignment':   'map',
       'icon-allow-overlap':        true,
       'icon-ignore-placement':     true,
-      'icon-size':                 1,
+      'icon-size':                 0.5,
     },
     paint: {
       'icon-opacity': 0.85,
