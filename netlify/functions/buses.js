@@ -10,11 +10,10 @@
 //   5. { count, timestamp, vehicles } 形式で返す
 // =========================================================
 
-const { GtfsRealtimeBindings } = require('gtfs-realtime-bindings');
+const { transit_realtime } = require('gtfs-realtime-bindings');
 const fetch = require('node-fetch');
 
 const TOEI_ENDPOINT = 'https://api.odpt.org/api/v4/gtfs/realtime/ToeiBus';
-const SEIBU_ENDPOINT = 'https://api.odpt.org/api/v4/gtfs/realtime/SeibuBus';
 
 // モック判定：APIキーが未設定 or プレースホルダーのまま
 function isMockMode(apiKey) {
@@ -28,7 +27,7 @@ async function fetchVehicles(endpoint, apiKey, operator) {
   if (!res.ok) throw new Error(`ODPT API error (${operator}): HTTP ${res.status}`);
 
   const buffer = await res.buffer();
-  const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(
+  const feed = transit_realtime.FeedMessage.decode(
     new Uint8Array(buffer)
   );
 
@@ -40,11 +39,14 @@ async function fetchVehicles(endpoint, apiKey, operator) {
     const { latitude, longitude } = vp.position;
     if (latitude == null || longitude == null) continue;
 
-    const speed = vp.position.speed != null
-      ? parseFloat((vp.position.speed * 3.6).toFixed(1))
+    // protobuf.js は未設定の optional float を 0 で返す → 0 は「未提供」として null 扱い
+    const rawSpeed   = vp.position.speed;
+    const rawBearing = vp.position.bearing;
+    const speed   = (rawSpeed   != null && rawSpeed   !== 0)
+      ? parseFloat((rawSpeed * 3.6).toFixed(1))
       : null;
-    const bearing = vp.position.bearing != null
-      ? parseFloat(vp.position.bearing.toFixed(1))
+    const bearing = (rawBearing != null && rawBearing !== 0)
+      ? parseFloat(rawBearing.toFixed(1))
       : null;
     const statusCode = vp.current_status ?? null;
 
@@ -54,12 +56,12 @@ async function fetchVehicles(endpoint, apiKey, operator) {
       latitude: parseFloat(latitude.toFixed(6)),
       longitude: parseFloat(longitude.toFixed(6)),
       bearing,
-      route:        vp.trip?.route_id ?? null,
-      vehicleLabel: vp.vehicle?.label ?? null,
-      nextStopId:   vp.stop_id       ?? null,
+      route:        null,
+      vehicleLabel: vp.vehicle?.label ?? entity.id,
       nextStop:     null,
       origin:       null,
       dest:         null,
+      current:      null,
       speed,
       status: statusCode != null ? (STOP_STATUS_LABEL[statusCode] ?? '不明') : null,
     });
@@ -114,6 +116,229 @@ const STOP_STATUS_LABEL = {
   2: '走行中',
 };
 
+// ===== バス停座標キャッシュ（同一プロセス内で再利用） =====
+let _busStopCache = null;
+let _busStopCacheTime = 0;
+const BUS_STOP_CACHE_TTL = 60 * 60 * 1000; // 1時間
+
+// BusstopPole 全件取得 → poleId → {lat, lon, name} の Map を返す（複数事業者を並列取得）
+async function fetchBusStopMap(apiKey) {
+  const now = Date.now();
+  if (_busStopCache && (now - _busStopCacheTime) < BUS_STOP_CACHE_TTL) {
+    return _busStopCache;
+  }
+  try {
+    const operators = ['odpt.Operator:Toei', 'odpt.Operator:YokohamaMunicipal'];
+    const allPoles = await Promise.all(operators.map(op =>
+      fetch(`https://api.odpt.org/api/v4/odpt:BusstopPole?odpt:operator=${op}&acl:consumerKey=${encodeURIComponent(apiKey)}`, { timeout: 15_000 })
+        .then(r => r.ok ? r.json() : []).catch(() => [])
+    ));
+    const map = new Map();
+    for (const poles of allPoles) {
+      for (const p of poles) {
+        const id = p['owl:sameAs'];
+        const lat = p['geo:lat'];
+        const lon = p['geo:long'];
+        const name = p['dc:title'] ?? p['odpt:note'] ?? null;
+        if (id && lat != null && lon != null) map.set(id, { lat, lon, name });
+      }
+    }
+    _busStopCache = map;
+    _busStopCacheTime = now;
+    console.log(`[bus-proxy] BusstopPole キャッシュ更新: ${map.size}件`);
+    return map;
+  } catch (err) {
+    console.warn('[bus-proxy] BusstopPole フェッチ失敗:', err.message);
+    return _busStopCache ?? new Map();
+  }
+}
+
+// 2点間の方位角（0〜360°、北=0）を計算
+function calcBearing(lat1, lon1, lat2, lon2) {
+  const toRad = d => d * Math.PI / 180;
+  const dLon  = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2))
+          - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  return parseFloat(((Math.atan2(y, x) * 180 / Math.PI + 360) % 360).toFixed(1));
+}
+
+// ODPT REST API から odpt:Bus 詳細を取得 → busNumber → データ の Map を返す
+async function fetchRestBusMap(apiKey, operatorId) {
+  const url = `https://api.odpt.org/api/v4/odpt:Bus?odpt:operator=${operatorId}&acl:consumerKey=${encodeURIComponent(apiKey)}`;
+  try {
+    const res = await fetch(url, { timeout: 10_000 });
+    if (!res.ok) {
+      console.warn(`[bus-proxy] REST API エラー (${operatorId}): HTTP ${res.status}`);
+      return new Map();
+    }
+    const buses = await res.json();
+    const map = new Map();
+    for (const bus of buses) {
+      const num = bus['odpt:busNumber'];
+      if (num) map.set(num, bus);
+    }
+    return map;
+  } catch (err) {
+    console.warn(`[bus-proxy] REST API フェッチ失敗 (${operatorId}):`, err.message);
+    return new Map();
+  }
+}
+
+// odpt:note を解析して系統・区間・現在地を抽出
+// パターン1: "都０１（Ｔ０１） 渋谷駅前→新橋駅前 六本木駅前"
+// パターン2: "ＲＨ０１ 渋谷駅前→六本木ヒルズ 南青山七丁目"  ← （）なし
+function parseOdptNote(note) {
+  if (!note) return {};
+  // {系統情報} {起点}→{終点} {現在地} という形式（スペースを区切りに使用）
+  const m = note.match(/^(.+?)\s+(.+?)→(.+?)\s+(.+)$/);
+  if (!m) return {};
+  return {
+    route:   m[1].trim(),  // "都０１（Ｔ０１）" or "ＲＨ０１"
+    origin:  m[2].trim(),  // "渋谷駅前"
+    dest:    m[3].trim(),  // "新橋駅前"
+    current: m[4].trim(),  // "六本木駅前"（直近の停留所エリア）
+  };
+}
+
+// GTFS-RT vehicles に REST API データと bearing をマージ
+function mergeRestData(vehicles, restMap, stopMap) {
+  return vehicles.map(v => {
+    const detail = restMap.get(v.vehicleLabel);
+    if (!detail) return v;
+    const parsed = parseOdptNote(detail['odpt:note']);
+
+    // fromBusstopPole → toBusstopPole の座標差から bearing を計算
+    let bearing = v.bearing; // GTFS-RT 提供値（通常 null）
+    const toStop = stopMap ? stopMap.get(detail['odpt:toBusstopPole']) : null;
+    if (bearing == null && stopMap) {
+      const from = stopMap.get(detail['odpt:fromBusstopPole']);
+      if (from && toStop) bearing = calcBearing(from.lat, from.lon, toStop.lat, toStop.lon);
+    }
+
+    return {
+      ...v,
+      bearing,
+      route:    parsed.route   ?? null,
+      origin:   parsed.origin  ?? null,
+      dest:     parsed.dest    ?? null,
+      current:  parsed.current ?? null,
+      nextStop: toStop?.name   ?? null,
+    };
+  });
+}
+
+// 西武バス note パース: "busNo:section:patternId:dir:current:nextStop"
+// 例: "493:成増駅南口〜光が丘駅:1013:2:光が丘ＩＭＡ:光が丘駅"
+function parseSeibuNote(note) {
+  if (!note) return {};
+  const parts = note.split(':');
+  if (parts.length < 6) return {};
+  const section = parts[1].trim();
+
+  let origin = null, dest = null;
+  if (section.includes('〜')) {
+    [origin, dest] = section.split('〜').map(s => s.trim());
+  } else if (section.includes('→')) {
+    const segs = section.split('→').map(s => s.trim());
+    origin = segs[0];
+    dest   = segs[segs.length - 1];
+  } else {
+    // "荻窪駅（上井草）石神井公園駅" のような形式
+    const m = section.match(/^(.+?)（.+?）(.+)$/);
+    if (m) { origin = m[1].trim(); dest = m[2].trim(); }
+  }
+
+  return {
+    origin,
+    dest,
+    current:  parts[4].trim() || null,
+    nextStop: parts[5].trim() || null,
+  };
+}
+
+// 西武バス REST odpt:Bus から vehicles 配列を生成
+async function fetchSeibuRestVehicles(apiKey) {
+  const url = `https://api.odpt.org/api/v4/odpt:Bus?odpt:operator=odpt.Operator:SeibuBus&acl:consumerKey=${encodeURIComponent(apiKey)}`;
+  try {
+    const res = await fetch(url, { timeout: 10_000 });
+    if (!res.ok) {
+      console.warn(`[bus-proxy] SeibuBus REST エラー: HTTP ${res.status}`);
+      return [];
+    }
+    const buses = await res.json();
+    return buses
+      .filter(b => b['geo:lat'] != null && b['geo:long'] != null)
+      .map(b => {
+        const noteInfo = parseSeibuNote(b['odpt:note']);
+        return {
+          id:           b['odpt:busNumber'] ?? b['owl:sameAs'],
+          operator:     'seibu',
+          latitude:     parseFloat(b['geo:lat'].toFixed(6)),
+          longitude:    parseFloat(b['geo:long'].toFixed(6)),
+          bearing:      b['odpt:azimuth'] ?? null,
+          vehicleLabel: b['odpt:busNumber'],
+          route:        null,           // ローマ字系統コードは表示しない
+          origin:       noteInfo.origin   ?? null,
+          dest:         noteInfo.dest     ?? null,
+          current:      noteInfo.current  ?? null,
+          nextStop:     noteInfo.nextStop ?? null,
+          speed:        null,
+          status:       null,
+        };
+      });
+  } catch (err) {
+    console.warn('[bus-proxy] SeibuBus REST フェッチ失敗:', err.message);
+    return [];
+  }
+}
+
+// 横浜市営バス REST odpt:Bus から vehicles 配列を生成
+async function fetchYokohamaRestVehicles(apiKey, stopMap) {
+  const url = `https://api.odpt.org/api/v4/odpt:Bus?odpt:operator=odpt.Operator:YokohamaMunicipal&acl:consumerKey=${encodeURIComponent(apiKey)}`;
+  try {
+    const res = await fetch(url, { timeout: 10_000 });
+    if (!res.ok) {
+      console.warn(`[bus-proxy] YokohamaMunicipal REST エラー: HTTP ${res.status}`);
+      return [];
+    }
+    const buses = await res.json();
+    return buses
+      .filter(b => b['geo:lat'] != null && b['geo:long'] != null)
+      .map(b => {
+        // 系統番号を busroute から抽出: "odpt.Busroute:YokohamaMunicipal.065" → "65系"
+        const routeRaw = b['odpt:busroute'] ?? '';
+        const routeNum = routeRaw.split('.').pop();
+        const route = routeNum ? `${parseInt(routeNum, 10)}系` : null;
+
+        // stopMap から停留所名を引く
+        const origin   = stopMap?.get(b['odpt:startingBusstopPole'])?.name ?? null;
+        const dest     = stopMap?.get(b['odpt:terminalBusstopPole'])?.name  ?? null;
+        const current  = stopMap?.get(b['odpt:fromBusstopPole'])?.name      ?? null;
+        const nextStop = stopMap?.get(b['odpt:toBusstopPole'])?.name         ?? null;
+
+        return {
+          id:           b['odpt:busNumber'] ?? b['owl:sameAs'],
+          operator:     'yokohama',
+          latitude:     parseFloat(b['geo:lat'].toFixed(6)),
+          longitude:    parseFloat(b['geo:long'].toFixed(6)),
+          bearing:      b['odpt:azimuth'] != null ? parseFloat(b['odpt:azimuth'].toFixed(1)) : null,
+          vehicleLabel: b['odpt:busNumber'],
+          route,
+          origin,
+          dest,
+          current,
+          nextStop,
+          speed:  null,
+          status: null,
+        };
+      });
+  } catch (err) {
+    console.warn('[bus-proxy] YokohamaMunicipal REST フェッチ失敗:', err.message);
+    return [];
+  }
+}
+
 // 方位角（度）を8方位の文字列に変換
 function bearingToCompass(deg) {
   const dirs = ['北', '北東', '東', '南東', '南', '南西', '西', '北西'];
@@ -127,6 +352,14 @@ const SEIBU_MOCK_ROUTE_DATA = [
   { route: '飯01', origin: '飯能駅', dest: '東飯能駅', stops: ['飯能市役所', '市民会館'] },
   { route: '川01', origin: '川越駅東口', dest: '的場', stops: ['平塚', '的場駅'] },
   { route: '志木01', origin: '志木駅南口', dest: '成増駅北口', stops: ['新座', '朝霞台'] },
+];
+
+const YOKOHAMA_MOCK_ROUTE_DATA = [
+  { route: '8系', origin: '横浜駅前', dest: '本牧車庫前', stops: ['桜木町駅前', '中華街入口', '本牧宮原'] },
+  { route: '26系', origin: '横浜駅前', dest: '海づり桟橋', stops: ['山下ふ頭入口', '本牧ふ頭入口', '港湾カレッジ前'] },
+  { route: '58系', origin: '桜木町駅前', dest: '磯子駅前', stops: ['麦田町', '根岸駅前', '八幡橋'] },
+  { route: '65系', origin: '横浜駅西口', dest: '港南台駅前', stops: ['保土ケ谷駅東口', '上大岡駅前', '清水橋'] },
+  { route: '101系', origin: '根岸駅前', dest: '保土ケ谷車庫前', stops: ['元町', '桜木町駅前', '洪福寺'] },
 ];
 
 // モックレスポンスを生成
@@ -175,10 +408,37 @@ function buildMockResponse() {
     };
   });
 
-  const vehicles = [...toeiVehicles, ...seibuVehicles];
+  const yokohamaVehicles = Array.from({ length: 30 }, (_, i) => {
+    // 横浜市営バスは横浜中心部から南側に寄せる
+    const lat = 35.38 + Math.random() * 0.12;
+    const lon = 139.55 + Math.random() * 0.14;
+    const rd = YOKOHAMA_MOCK_ROUTE_DATA[i % YOKOHAMA_MOCK_ROUTE_DATA.length];
+    const current = rd.stops[Math.floor(Math.random() * rd.stops.length)];
+    const nextStop = rd.stops[Math.floor(Math.random() * rd.stops.length)];
+    return {
+      id: `YokohamaMunicipal.MOCK${String(i + 1).padStart(3, '0')}`,
+      operator: 'yokohama',
+      latitude: parseFloat(lat.toFixed(6)),
+      longitude: parseFloat(lon.toFixed(6)),
+      bearing: Math.floor(Math.random() * 360),
+      route: rd.route,
+      origin: rd.origin,
+      dest: rd.dest,
+      current,
+      nextStop,
+      speed: null,
+      status: null,
+    };
+  });
+
+  const vehicles = [...toeiVehicles, ...seibuVehicles, ...yokohamaVehicles];
   return {
     count: vehicles.length,
-    countByOperator: { toei: toeiVehicles.length, seibu: seibuVehicles.length },
+    countByOperator: {
+      toei: toeiVehicles.length,
+      seibu: seibuVehicles.length,
+      yokohama: yokohamaVehicles.length,
+    },
     timestamp: new Date().toISOString(),
     vehicles,
     mock: true,
@@ -196,7 +456,7 @@ exports.handler = async function (event, context) {
   try {
     const apiKey = process.env.ODPT_API_KEY;
 
-    // --- モードモード ---
+    // --- モックモード ---
     if (isMockMode(apiKey)) {
       console.log('[bus-proxy] ODPT_API_KEY 未設定 → モックデータを返します');
       return {
@@ -206,20 +466,27 @@ exports.handler = async function (event, context) {
       };
     }
 
-    // --- 本番モード: ODPT から並列フェッチ ---
-    const [toeiVehicles, seibuVehicles] = await Promise.allSettled([
-      fetchVehicles(TOEI_ENDPOINT, apiKey, 'toei'),
-      fetchVehicles(SEIBU_ENDPOINT, apiKey, 'seibu'),
-    ]).then(results => results.map((r, i) => {
-      if (r.status === 'fulfilled') return r.value;
-      console.error(`[bus-proxy] フェッチ失敗 (${i === 0 ? 'toei' : 'seibu'}):`, r.reason?.message);
-      return [];
-    }));
+    // --- 本番モード: GTFS-RT(都営) + REST API(全社) + BusstopPole を並列フェッチ ---
+    // 横浜市営は stopMap が必要なので先に取得
+    const [toeiGtfs, toeiRestMap, busStopMap, seibuVehicles] = await Promise.all([
+      fetchVehicles(TOEI_ENDPOINT, apiKey, 'toei').catch(err => {
+        console.error('[bus-proxy] ToeiBus GTFS-RT 失敗:', err.message);
+        return [];
+      }),
+      fetchRestBusMap(apiKey, 'odpt.Operator:Toei'),
+      fetchBusStopMap(apiKey),
+      fetchSeibuRestVehicles(apiKey),
+    ]);
 
-    const vehicles = [...toeiVehicles, ...seibuVehicles];
+    const yokohamaVehicles = await fetchYokohamaRestVehicles(apiKey, busStopMap);
+
+    // 都営: GTFS-RT + REST API（系統・停留所・bearing）をマージ
+    const toeiVehicles = mergeRestData(toeiGtfs, toeiRestMap, busStopMap);
+
+    const vehicles = [...toeiVehicles, ...seibuVehicles, ...yokohamaVehicles];
     const payload = {
       count: vehicles.length,
-      countByOperator: { toei: toeiVehicles.length, seibu: seibuVehicles.length },
+      countByOperator: { toei: toeiVehicles.length, seibu: seibuVehicles.length, yokohama: yokohamaVehicles.length },
       timestamp: new Date().toISOString(),
       vehicles,
     };

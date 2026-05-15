@@ -51,6 +51,22 @@ html, body {
   color: #facc15;
 }
 
+.count-yokohama {
+  color: #f97316;
+}
+
+#train-count {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.12);
+}
+
+.count-trains {
+  color: #a78bfa; /* 薄紫 */
+}
+
 #clock {
   font-size: 22px;
   font-weight: 300;
@@ -58,7 +74,36 @@ html, body {
   color: #fff;
 }
 
+/* 路線トグル行 */
+#train-toggles {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+/* クリッカブルなトグルボタン共通 */
+.toggle-btn {
+  cursor: pointer;
+  transition: opacity 0.2s;
+  pointer-events: auto; /* overlay の pointer-events:none を上書き */
+  user-select: none;
+}
+.toggle-btn:hover {
+  opacity: 0.75;
+}
+.toggle-btn.off {
+  opacity: 0.25;
+  text-decoration: line-through;
+}
+
 /* ポップアップ：MapLibreデフォルトを上書き */
+.bus-popup {
+  z-index: 20; /* overlay(z-index:10)より前面に */
+}
+
 .bus-popup .maplibregl-popup-content {
   background: rgba(10, 10, 10, 0.88);
   backdrop-filter: blur(8px);
