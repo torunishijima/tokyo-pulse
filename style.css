@@ -99,6 +99,31 @@ html, body {
   text-decoration: line-through;
 }
 
+/* ゲームボタン */
+#game-btn {
+  position: absolute;
+  bottom: 24px;
+  right: 20px;
+  z-index: 10;
+  font-size: 28px;
+  text-decoration: none;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 50%;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s, background 0.15s;
+}
+#game-btn:hover {
+  transform: scale(1.1);
+  background: rgba(255,59,92,0.4);
+}
+
 /* ポップアップ：MapLibreデフォルトを上書き */
 .bus-popup {
   z-index: 20; /* overlay(z-index:10)より前面に */
