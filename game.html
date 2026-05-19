@@ -50,36 +50,40 @@ function init() {
 }
 
 // ── 入力 ─────────────────────────────────────────────────────────
-let touchX0 = null;
+let ptrX0 = null;
 
-function tap(cx) {
+function toGameX(clientX) {
+  const rect = C.getBoundingClientRect();
+  return (clientX - rect.left) / scale;
+}
+
+function tap(gx) {
   if (state === 'title' || state === 'dead') { state = 'play'; init(); return; }
   if (state === 'play') {
-    if (cx < W / 2) { if (laneIndex > 0) laneIndex--; }
+    if (gx < W / 2) { if (laneIndex > 0) laneIndex--; }
     else            { if (laneIndex < 2) laneIndex++; }
   }
 }
 
-// マウス
-C.addEventListener('click', e => {
-  tap(e.offsetX / scale);
+// Pointer Events でマウス・タッチを一本化
+C.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  ptrX0 = e.clientX;
 });
 
-// タッチ
-C.addEventListener('touchstart', e => {
+C.addEventListener('pointerup', e => {
   e.preventDefault();
-  touchX0 = e.touches[0].clientX;
-}, { passive: false });
-
-C.addEventListener('touchend', e => {
-  e.preventDefault();
-  const dx = e.changedTouches[0].clientX - touchX0;
-  const cx = e.changedTouches[0].clientX / scale;
-  if (Math.abs(dx) < 30) tap(cx);
-  else if (dx < 0) { if (state === 'play' && laneIndex > 0) laneIndex--; }
-  else             { if (state === 'play' && laneIndex < 2) laneIndex++; }
-  touchX0 = null;
-}, { passive: false });
+  if (ptrX0 === null) return;
+  const dx = e.clientX - ptrX0;
+  const gx = toGameX(e.clientX);
+  if (Math.abs(dx) < 20) {
+    tap(gx);
+  } else if (state === 'play') {
+    if (dx < 0) { if (laneIndex > 0) laneIndex--; }
+    else        { if (laneIndex < 2) laneIndex++; }
+  }
+  ptrX0 = null;
+});
 
 // キーボード
 document.addEventListener('keydown', e => {
