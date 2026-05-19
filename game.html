@@ -8,7 +8,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; background: #0a0a1a; }
     body { display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    canvas { display: block; touch-action: none; }
+    canvas { display: block; }
   </style>
 </head>
 <body>
@@ -50,8 +50,6 @@ function init() {
 }
 
 // ── 入力 ─────────────────────────────────────────────────────────
-let ptrX0 = null;
-
 function toGameX(clientX) {
   const rect = C.getBoundingClientRect();
   return (clientX - rect.left) / scale;
@@ -65,27 +63,31 @@ function tap(gx) {
   }
 }
 
-// Pointer Events でマウス・タッチを一本化
-C.addEventListener('pointerdown', e => {
-  e.preventDefault();
-  ptrX0 = e.clientX;
-});
+// ── 入力: click は viewport meta があれば Chrome Android で遅延なし ──
+let swipeX0 = null;
 
-C.addEventListener('pointerup', e => {
-  e.preventDefault();
-  if (ptrX0 === null) return;
-  const dx = e.clientX - ptrX0;
-  const gx = toGameX(e.clientX);
-  if (Math.abs(dx) < 20) {
-    tap(gx);
-  } else if (state === 'play') {
+document.addEventListener('touchstart', e => {
+  swipeX0 = e.touches[0].clientX;
+}, { passive: true });
+
+document.addEventListener('touchend', e => {
+  if (swipeX0 === null) return;
+  const dx = e.changedTouches[0].clientX - swipeX0;
+  swipeX0 = null;
+  if (Math.abs(dx) >= 30 && state === 'play') {
+    // スワイプ：click より先に処理
     if (dx < 0) { if (laneIndex > 0) laneIndex--; }
     else        { if (laneIndex < 2) laneIndex++; }
   }
-  ptrX0 = null;
+  // tap の場合は後続の click イベントに任せる
+}, { passive: true });
+
+document.addEventListener('click', e => {
+  // スワイプ後の合成 click は無視
+  if (swipeX0 !== null) return;
+  tap(toGameX(e.clientX));
 });
 
-// キーボード
 document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft')  { if (state === 'play' && laneIndex > 0) laneIndex--; }
   if (e.key === 'ArrowRight') { if (state === 'play' && laneIndex < 2) laneIndex++; }
