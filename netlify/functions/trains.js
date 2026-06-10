@@ -8,9 +8,17 @@
 //   3. bearing を計算して GeoJSON 形式で返す
 // =========================================================
 
-const fetch = require('node-fetch');
-
 const TOEI_OPERATOR = 'odpt.Operator:Toei';
+
+// Node 18+ のネイティブ fetch にタイムアウトを付与するラッパー
+function fetchWithTimeout(url, ms = 10_000) {
+  return fetch(url, { signal: AbortSignal.timeout(ms) });
+}
+
+// --- レスポンスキャッシュ（同一プロセス内で再利用） ---
+let _responseCache = null;
+let _responseCacheTime = 0;
+const RESPONSE_CACHE_TTL = 15_000; // 15秒
 
 // 路線コード → 日本語名・公式キーカラー
 const LINE_INFO = {
@@ -46,9 +54,9 @@ async function fetchStationMap(apiKey) {
   if (_stationCache && (now - _stationCacheTime) < STATION_CACHE_TTL) {
     return _stationCache;
   }
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://api.odpt.org/api/v4/odpt:Station?odpt:operator=${TOEI_OPERATOR}&acl:consumerKey=${encodeURIComponent(apiKey)}`,
-    { timeout: 10_000 }
+    10_000
   );
   if (!res.ok) throw new Error(`Station fetch error: HTTP ${res.status}`);
   const stations = await res.json();
@@ -72,9 +80,9 @@ async function fetchRailwayOrderMap(apiKey) {
     return _railwayOrderCache;
   }
 
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://api.odpt.org/api/v4/odpt:Railway?odpt:operator=${TOEI_OPERATOR}&acl:consumerKey=${encodeURIComponent(apiKey)}`,
-    { timeout: 10_000 }
+    10_000
   );
   if (!res.ok) throw new Error(`Railway fetch error: HTTP ${res.status}`);
 
@@ -137,7 +145,7 @@ function inferToStation(lineCode, fromId, railDirection, railwayOrderMap, destin
 exports.handler = async function (event, context) {
   const headers = {
     'Content-Type': 'application/json',
-    'Cache-Control': 'no-store',
+    'Cache-Control': 'public, max-age=15, stale-while-revalidate=30',
     'Access-Control-Allow-Origin': '*',
   };
 
@@ -147,12 +155,18 @@ exports.handler = async function (event, context) {
       return { statusCode: 200, headers, body: JSON.stringify({ count: 0, countByLine: {}, trains: [] }) };
     }
 
+    // --- プロセス内キャッシュ: TTL 内なら ODPT を叩かず即返す ---
+    const cacheNow = Date.now();
+    if (_responseCache && (cacheNow - _responseCacheTime) < RESPONSE_CACHE_TTL) {
+      return { statusCode: 200, headers, body: _responseCache };
+    }
+
     const [stationMap, railwayOrderMap, trainRes] = await Promise.all([
       fetchStationMap(apiKey),
       fetchRailwayOrderMap(apiKey),
-      fetch(
+      fetchWithTimeout(
         `https://api.odpt.org/api/v4/odpt:Train?odpt:operator=${TOEI_OPERATOR}&acl:consumerKey=${encodeURIComponent(apiKey)}`,
-        { timeout: 10_000 }
+        10_000
       ),
     ]);
 
@@ -207,11 +221,16 @@ exports.handler = async function (event, context) {
       countByLine[tr.line] = (countByLine[tr.line] ?? 0) + 1;
     }
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ count: trains.length, countByLine, trains }),
-    };
+    const body = JSON.stringify({
+      count: trains.length,
+      countByLine,
+      timestamp: new Date().toISOString(),
+      trains,
+    });
+    _responseCache = body;
+    _responseCacheTime = cacheNow;
+
+    return { statusCode: 200, headers, body };
 
   } catch (err) {
     console.error('[train-proxy] エラー:', err.message);

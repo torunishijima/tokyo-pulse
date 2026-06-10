@@ -2,8 +2,17 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Tokyo Pulse</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Tokyo Pulse">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
 
   <!-- MapLibre GL JS (CDN) -->
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
@@ -26,20 +35,20 @@
       <button id="collapse-btn" title="パネルを折りたたむ">−</button>
     </div>
     <div id="overlay-body">
-      <div id="bus-count">
-        <span id="count-toei"     class="count-toei     toggle-btn" data-key="toei">都営 — 台</span>
-        <span id="count-seibu"    class="count-seibu    toggle-btn" data-key="seibu">西武 — 台</span>
-        <span id="count-yokohama" class="count-yokohama toggle-btn" data-key="yokohama">横浜市営 — 台</span>
+      <div id="bus-count" role="group" aria-label="バス事業者の表示切り替え">
+        <button type="button" id="count-toei"     class="count-toei     toggle-btn" data-key="toei"     aria-pressed="true">都営 — 台</button>
+        <button type="button" id="count-seibu"    class="count-seibu    toggle-btn" data-key="seibu"    aria-pressed="true">西武 — 台</button>
+        <button type="button" id="count-yokohama" class="count-yokohama toggle-btn" data-key="yokohama" aria-pressed="true">横浜市営 — 台</button>
       </div>
       <div id="train-count">
         <span id="count-trains" class="count-trains">地下鉄・都電 — 本</span>
       </div>
-      <div id="train-toggles">
-        <span class="train-toggle toggle-btn" data-line="Asakusa">浅草</span>
-        <span class="train-toggle toggle-btn" data-line="Mita">三田</span>
-        <span class="train-toggle toggle-btn" data-line="Shinjuku">新宿</span>
-        <span class="train-toggle toggle-btn" data-line="Oedo">大江戸</span>
-        <span class="train-toggle toggle-btn" data-line="Arakawa">荒川</span>
+      <div id="train-toggles" role="group" aria-label="路線の表示切り替え">
+        <button type="button" class="train-toggle toggle-btn" data-line="Asakusa"  aria-pressed="true">浅草</button>
+        <button type="button" class="train-toggle toggle-btn" data-line="Mita"     aria-pressed="true">三田</button>
+        <button type="button" class="train-toggle toggle-btn" data-line="Shinjuku" aria-pressed="true">新宿</button>
+        <button type="button" class="train-toggle toggle-btn" data-line="Oedo"     aria-pressed="true">大江戸</button>
+        <button type="button" class="train-toggle toggle-btn" data-line="Arakawa"  aria-pressed="true">荒川</button>
       </div>
     </div>
   </div>
@@ -52,5 +61,16 @@
   </div>
 
   <script src="js/main.js"></script>
+
+  <!-- Service Worker 登録（PWA / オフライン対応） -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(err => {
+          console.warn('[tokyo-pulse] SW 登録失敗:', err.message);
+        });
+      });
+    }
+  </script>
 </body>
 </html>

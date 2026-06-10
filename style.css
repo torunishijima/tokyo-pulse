@@ -22,8 +22,8 @@ html, body {
 /* 情報オーバーレイ */
 #overlay {
   position: absolute;
-  top: 20px;
-  left: 20px;
+  top: calc(20px + env(safe-area-inset-top));
+  left: calc(20px + env(safe-area-inset-left));
   z-index: 10;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(6px);
@@ -166,15 +166,28 @@ html, body {
   flex-wrap: wrap;
 }
 
-/* クリッカブルなトグルボタン共通 */
+/* クリッカブルなトグルボタン共通（<button> のデフォルト見た目を打ち消す） */
 .toggle-btn {
   cursor: pointer;
   transition: opacity 0.2s;
   pointer-events: auto; /* overlay の pointer-events:none を上書き */
   user-select: none;
+  /* button リセット：色は各トグルの色クラス / JS インラインに任せる */
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
 }
 .toggle-btn:hover {
   opacity: 0.75;
+}
+.toggle-btn:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 2px;
+  border-radius: 3px;
+  opacity: 1;
 }
 .toggle-btn.off {
   opacity: 0.25;
@@ -184,8 +197,8 @@ html, body {
 /* 右下アクションボタン群 */
 #actions {
   position: absolute;
-  bottom: 24px;
-  right: 20px;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  right: calc(20px + env(safe-area-inset-right));
   z-index: 10;
   display: flex;
   flex-direction: column;

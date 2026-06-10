@@ -1,0 +1,20 @@
+{
+  "name": "Tokyo Pulse",
+  "short_name": "Tokyo Pulse",
+  "description": "東京の公共交通（バス・地下鉄・都電）のリアルタイム位置を地図に表示する",
+  "lang": "ja",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

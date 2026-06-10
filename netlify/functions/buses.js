@@ -11,9 +11,20 @@
 // =========================================================
 
 const { transit_realtime } = require('gtfs-realtime-bindings');
-const fetch = require('node-fetch');
 
 const TOEI_ENDPOINT = 'https://api.odpt.org/api/v4/gtfs/realtime/ToeiBus';
+
+// Node 18+ のネイティブ fetch にタイムアウトを付与するラッパー
+// （node-fetch の { timeout } 相当を AbortSignal で実装）
+function fetchWithTimeout(url, ms = 10_000) {
+  return fetch(url, { signal: AbortSignal.timeout(ms) });
+}
+
+// --- レスポンスキャッシュ（同一プロセス内で再利用） ---
+// 全ユーザーのリクエストを集約し、ODPT への負荷を抑える
+let _responseCache = null;
+let _responseCacheTime = 0;
+const RESPONSE_CACHE_TTL = 15_000; // 15秒
 
 // モック判定：APIキーが未設定 or プレースホルダーのまま
 function isMockMode(apiKey) {
@@ -23,10 +34,10 @@ function isMockMode(apiKey) {
 // GTFS-RT バイナリを取得してパース → vehicles 配列を返す
 async function fetchVehicles(endpoint, apiKey, operator) {
   const url = `${endpoint}?acl:consumerKey=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, { timeout: 10_000 });
+  const res = await fetchWithTimeout(url, 10_000);
   if (!res.ok) throw new Error(`ODPT API error (${operator}): HTTP ${res.status}`);
 
-  const buffer = await res.buffer();
+  const buffer = Buffer.from(await res.arrayBuffer());
   const feed = transit_realtime.FeedMessage.decode(
     new Uint8Array(buffer)
   );
@@ -130,7 +141,7 @@ async function fetchBusStopMap(apiKey) {
   try {
     const operators = ['odpt.Operator:Toei', 'odpt.Operator:YokohamaMunicipal'];
     const allPoles = await Promise.all(operators.map(op =>
-      fetch(`https://api.odpt.org/api/v4/odpt:BusstopPole?odpt:operator=${op}&acl:consumerKey=${encodeURIComponent(apiKey)}`, { timeout: 15_000 })
+      fetchWithTimeout(`https://api.odpt.org/api/v4/odpt:BusstopPole?odpt:operator=${op}&acl:consumerKey=${encodeURIComponent(apiKey)}`, 15_000)
         .then(r => r.ok ? r.json() : []).catch(() => [])
     ));
     const map = new Map();
@@ -167,7 +178,7 @@ function calcBearing(lat1, lon1, lat2, lon2) {
 async function fetchRestBusMap(apiKey, operatorId) {
   const url = `https://api.odpt.org/api/v4/odpt:Bus?odpt:operator=${operatorId}&acl:consumerKey=${encodeURIComponent(apiKey)}`;
   try {
-    const res = await fetch(url, { timeout: 10_000 });
+    const res = await fetchWithTimeout(url, 10_000);
     if (!res.ok) {
       console.warn(`[bus-proxy] REST API エラー (${operatorId}): HTTP ${res.status}`);
       return new Map();
@@ -261,7 +272,7 @@ function parseSeibuNote(note) {
 async function fetchSeibuRestVehicles(apiKey) {
   const url = `https://api.odpt.org/api/v4/odpt:Bus?odpt:operator=odpt.Operator:SeibuBus&acl:consumerKey=${encodeURIComponent(apiKey)}`;
   try {
-    const res = await fetch(url, { timeout: 10_000 });
+    const res = await fetchWithTimeout(url, 10_000);
     if (!res.ok) {
       console.warn(`[bus-proxy] SeibuBus REST エラー: HTTP ${res.status}`);
       return [];
@@ -297,7 +308,7 @@ async function fetchSeibuRestVehicles(apiKey) {
 async function fetchYokohamaRestVehicles(apiKey, stopMap) {
   const url = `https://api.odpt.org/api/v4/odpt:Bus?odpt:operator=odpt.Operator:YokohamaMunicipal&acl:consumerKey=${encodeURIComponent(apiKey)}`;
   try {
-    const res = await fetch(url, { timeout: 10_000 });
+    const res = await fetchWithTimeout(url, 10_000);
     if (!res.ok) {
       console.warn(`[bus-proxy] YokohamaMunicipal REST エラー: HTTP ${res.status}`);
       return [];
@@ -448,7 +459,8 @@ function buildMockResponse() {
 exports.handler = async function (event, context) {
   const headers = {
     'Content-Type': 'application/json',
-    'Cache-Control': 'no-store',
+    // CDN / ブラウザに 15 秒キャッシュさせ、その後 30 秒は再検証中も古い値を許可
+    'Cache-Control': 'public, max-age=15, stale-while-revalidate=30',
     // 同一オリジンからの呼び出しを許可
     'Access-Control-Allow-Origin': '*',
   };
@@ -464,6 +476,12 @@ exports.handler = async function (event, context) {
         headers,
         body: JSON.stringify(buildMockResponse()),
       };
+    }
+
+    // --- プロセス内キャッシュ: TTL 内なら ODPT を叩かず即返す ---
+    const now = Date.now();
+    if (_responseCache && (now - _responseCacheTime) < RESPONSE_CACHE_TTL) {
+      return { statusCode: 200, headers, body: _responseCache };
     }
 
     // --- 本番モード: GTFS-RT(都営) + REST API(全社) + BusstopPole を並列フェッチ ---
@@ -491,11 +509,11 @@ exports.handler = async function (event, context) {
       vehicles,
     };
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify(payload),
-    };
+    const body = JSON.stringify(payload);
+    _responseCache = body;
+    _responseCacheTime = now;
+
+    return { statusCode: 200, headers, body };
 
   } catch (err) {
     console.error('[bus-proxy] エラー:', err.message);
