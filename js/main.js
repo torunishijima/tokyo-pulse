@@ -269,10 +269,41 @@ map.on('load', () => {
   setInterval(fetchAndUpdateTrains, POLL_INTERVAL_MS);
 });
 
+// --- 接続状態の表示 ---
+let lastUpdateTime = null;
+let busOk = true;
+let trainOk = true;
+
+function setStatus(mode) {
+  const el = document.getElementById('status');
+  const text = document.getElementById('status-text');
+  el.className = mode;
+  if (mode === 'updating') {
+    text.textContent = '更新中…';
+  } else if (mode === 'error') {
+    text.textContent = '接続エラー';
+  } else if (lastUpdateTime) {
+    const hh = String(lastUpdateTime.getHours()).padStart(2, '0');
+    const mm = String(lastUpdateTime.getMinutes()).padStart(2, '0');
+    const ss = String(lastUpdateTime.getSeconds()).padStart(2, '0');
+    text.textContent = `${hh}:${mm}:${ss} 更新`;
+  }
+}
+
+function reportFetchResult() {
+  if (busOk || trainOk) {
+    lastUpdateTime = new Date();
+    setStatus('live');
+  } else {
+    setStatus('error');
+  }
+}
+
 // --- データ取得 & 地図更新 ---
 async function fetchAndUpdate() {
   if (busFetchInFlight) return;
   busFetchInFlight = true;
+  setStatus('updating');
 
   try {
     const res = await fetch(API_ENDPOINT);
@@ -289,11 +320,13 @@ async function fetchAndUpdate() {
     }, 300);
 
     updateOverlay(data.countByOperator);
+    busOk = true;
   } catch (err) {
-    // エラーは静かに無視し、次のポーリングに委ねる
     console.warn('[tokyo-pulse] fetch failed:', err.message);
+    busOk = false;
   } finally {
     busFetchInFlight = false;
+    reportFetchResult();
   }
 }
 
@@ -315,10 +348,13 @@ async function fetchAndUpdateTrains() {
     }, 300);
 
     updateTrainOverlay(data.countByLine);
+    trainOk = true;
   } catch (err) {
     console.warn('[tokyo-pulse] train fetch failed:', err.message);
+    trainOk = false;
   } finally {
     trainFetchInFlight = false;
+    reportFetchResult();
   }
 }
 
@@ -505,3 +541,36 @@ function tickClock() {
 }
 tickClock();
 setInterval(tickClock, 1_000);
+
+// --- パネル折りたたみ ---
+document.getElementById('collapse-btn').addEventListener('click', () => {
+  const overlay = document.getElementById('overlay');
+  const btn = document.getElementById('collapse-btn');
+  const collapsed = overlay.classList.toggle('collapsed');
+  btn.textContent = collapsed ? '+' : '−';
+  btn.title = collapsed ? 'パネルを開く' : 'パネルを折りたたむ';
+});
+
+// --- 手動更新 ---
+document.getElementById('refresh-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('refresh-btn');
+  btn.classList.add('spinning');
+  await Promise.allSettled([fetchAndUpdate(), fetchAndUpdateTrains()]);
+  btn.classList.remove('spinning');
+});
+
+// --- 現在地へ移動 ---
+document.getElementById('locate-btn').addEventListener('click', () => {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      map.flyTo({
+        center: [pos.coords.longitude, pos.coords.latitude],
+        zoom: 14,
+        duration: 1_200,
+      });
+    },
+    err => console.warn('[tokyo-pulse] geolocation failed:', err.message),
+    { enableHighAccuracy: false, timeout: 8_000 }
+  );
+});
