@@ -46,22 +46,20 @@ function makeArrowIconImageData(color, iw = 22, ih = 44) {
   canvas.height = ih;
   const ctx = canvas.getContext('2d');
 
-  // アイコン本体のサイズ（キャンバス内でやや余白を持たせる）
+  // 先端を y=0 に置き、icon-anchor:'top' で GPS 座標と一致させる
   const pad   = 2;
-  const w     = iw - pad * 2;
-  const h     = ih - pad * 2;
-  const x     = pad;
-  const y     = pad;
-  const notch = h * 0.22; // 後部Vノッチの深さ
+  const cx    = iw / 2;
+  const bh    = ih - pad;       // 後端 Y（下だけ余白）
+  const notch = bh * 0.22;      // 後部Vノッチの深さ
 
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.moveTo(x + w / 2, y);              // 前部・先端（上中央）
-  ctx.lineTo(x + w,     y + h * 0.28);  // 右肩
-  ctx.lineTo(x + w,     y + h);         // 後部・右下
-  ctx.lineTo(x + w / 2, y + h - notch); // 後部・中央ノッチ
-  ctx.lineTo(x,         y + h);         // 後部・左下
-  ctx.lineTo(x,         y + h * 0.28);  // 左肩
+  ctx.moveTo(cx,       0);              // 前部・先端（上中央／アンカー位置）
+  ctx.lineTo(iw - pad, ih * 0.28);     // 右肩
+  ctx.lineTo(iw - pad, bh);            // 後部・右下
+  ctx.lineTo(cx,       bh - notch);    // 後部・中央ノッチ
+  ctx.lineTo(pad,      bh);            // 後部・左下
+  ctx.lineTo(pad,      ih * 0.28);     // 左肩
   ctx.closePath();
   ctx.fill();
 
@@ -207,6 +205,7 @@ map.on('load', () => {
         'yokohama', 'arrow-yokohama',
         'arrow-toei', // fallback
       ],
+      'icon-anchor':               'top',
       'icon-rotate':               ['coalesce', ['get', 'bearing'], 0],
       'icon-rotation-alignment':   'map',
       'icon-allow-overlap':        true,
@@ -266,6 +265,7 @@ map.on('load', () => {
         'Arakawa',  'train-Arakawa',
         'train-Asakusa',
       ],
+      'icon-anchor':             'top',
       'icon-rotate':             ['coalesce', ['get', 'bearing'], 0],
       'icon-rotation-alignment': 'map',
       'icon-allow-overlap':      true,
