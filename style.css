@@ -22,8 +22,8 @@ html, body {
 /* 情報オーバーレイ */
 #overlay {
   position: absolute;
-  top: 20px;
-  left: 20px;
+  top: calc(20px + env(safe-area-inset-top));
+  left: calc(20px + env(safe-area-inset-left));
   z-index: 10;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(6px);
@@ -34,6 +34,69 @@ html, body {
   color: rgba(255, 255, 255, 0.85);
   line-height: 1.8;
   pointer-events: none;
+  max-width: calc(100vw - 40px);
+}
+
+/* ヘッダー行：時計＋接続状態＋折りたたみ */
+#overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+#status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #555;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+#status.live #status-dot {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.8);
+}
+#status.error #status-dot {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+#status.updating #status-dot {
+  background: #facc15;
+  animation: blink 0.8s ease-in-out infinite;
+}
+@keyframes blink {
+  50% { opacity: 0.3; }
+}
+
+#collapse-btn {
+  margin-left: auto;
+  pointer-events: auto;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.6);
+  width: 22px;
+  height: 22px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  font-family: inherit;
+}
+#collapse-btn:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+#overlay.collapsed #overlay-body {
+  display: none;
 }
 
 #bus-count {
@@ -74,6 +137,25 @@ html, body {
   color: #fff;
 }
 
+/* スマホ：オーバーレイをコンパクトに */
+@media (max-width: 480px) {
+  #overlay {
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    padding: 8px 12px;
+    line-height: 1.6;
+    max-width: none;
+  }
+  #clock { font-size: 18px; }
+  #bus-count { font-size: 12px; gap: 8px; flex-wrap: wrap; }
+  #train-count { font-size: 12px; }
+  #collapse-btn {
+    width: 30px;
+    height: 30px; /* タップしやすく */
+  }
+}
+
 /* 路線トグル行 */
 #train-toggles {
   font-size: 11px;
@@ -84,19 +166,80 @@ html, body {
   flex-wrap: wrap;
 }
 
-/* クリッカブルなトグルボタン共通 */
+/* クリッカブルなトグルボタン共通（<button> のデフォルト見た目を打ち消す） */
 .toggle-btn {
   cursor: pointer;
   transition: opacity 0.2s;
   pointer-events: auto; /* overlay の pointer-events:none を上書き */
   user-select: none;
+  /* button リセット：色は各トグルの色クラス / JS インラインに任せる */
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
 }
 .toggle-btn:hover {
   opacity: 0.75;
 }
+.toggle-btn:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 2px;
+  border-radius: 3px;
+  opacity: 1;
+}
 .toggle-btn.off {
   opacity: 0.25;
   text-decoration: line-through;
+}
+
+/* 右下アクションボタン群 */
+#actions {
+  position: absolute;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  right: calc(20px + env(safe-area-inset-right));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.action-btn {
+  font-size: 22px;
+  text-decoration: none;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.85);
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.15s, background 0.15s;
+  padding: 0;
+}
+.action-btn:hover {
+  transform: scale(1.08);
+  background: rgba(255,255,255,0.15);
+}
+#game-btn:hover {
+  background: rgba(255,59,92,0.4);
+}
+#refresh-btn.spinning {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 480px) {
+  #actions { bottom: 16px; right: 12px; }
 }
 
 /* ポップアップ：MapLibreデフォルトを上書き */

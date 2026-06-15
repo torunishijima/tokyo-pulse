@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Tokyo Rush</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #0a0a1a; }
+    body { display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const C = document.getElementById('c');
+const ctx = C.getContext('2d');
+
+// ── サイズ ──────────────────────────────────────────────────────
+const W = 360, H = 640;
+let scale = 1;
+function resize() {
+  scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  C.style.width  = W * scale + 'px';
+  C.style.height = H * scale + 'px';
+  C.width  = W;
+  C.height = H;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── 状態 ────────────────────────────────────────────────────────
+// state: 'title' | 'play' | 'dead'
+let state = 'title';
+let laneIndex = 1;
+const LANES = [70, 180, 290];
+
+let player, obstacles, coins, particles;
+let score, speed, spawnTimer, coinTimer, frame;
+let best = +localStorage.getItem('tr_best') || 0;
+let roadOff = 0;
+
+function init() {
+  laneIndex = 1;
+  player = { x: LANES[1], y: H - 110, tx: LANES[1] };
+  obstacles = []; coins = []; particles = [];
+  score = 0; speed = 3.5;
+  spawnTimer = 60; coinTimer = 40; frame = 0;
+}
+
+// ── 入力 ─────────────────────────────────────────────────────────
+function toGameX(clientX) {
+  const rect = C.getBoundingClientRect();
+  return (clientX - rect.left) / scale;
+}
+
+function tap(gx) {
+  if (state === 'title' || state === 'dead') { state = 'play'; init(); return; }
+  if (state === 'play') {
+    if (gx < W / 2) { if (laneIndex > 0) laneIndex--; }
+    else            { if (laneIndex < 2) laneIndex++; }
+  }
+}
+
+// ── 入力: click は viewport meta があれば Chrome Android で遅延なし ──
+let swipeX0 = null;
+
+document.addEventListener('touchstart', e => {
+  swipeX0 = e.touches[0].clientX;
+}, { passive: true });
+
+document.addEventListener('touchend', e => {
+  if (swipeX0 === null) return;
+  const dx = e.changedTouches[0].clientX - swipeX0;
+  swipeX0 = null;
+  if (Math.abs(dx) >= 30 && state === 'play') {
+    // スワイプ：click より先に処理
+    if (dx < 0) { if (laneIndex > 0) laneIndex--; }
+    else        { if (laneIndex < 2) laneIndex++; }
+  }
+  // tap の場合は後続の click イベントに任せる
+}, { passive: true });
+
+document.addEventListener('click', e => {
+  // スワイプ後の合成 click は無視
+  if (swipeX0 !== null) return;
+  tap(toGameX(e.clientX));
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft')  { if (state === 'play' && laneIndex > 0) laneIndex--; }
+  if (e.key === 'ArrowRight') { if (state === 'play' && laneIndex < 2) laneIndex++; }
+  if (e.key === ' ' && state !== 'play') { state = 'play'; init(); }
+});
+
+// ── ユーティリティ ────────────────────────────────────────────────
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+}
+
+function particle(x, y, col, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.PI * 2 * i / n + Math.random();
+    particles.push({ x, y, vx: Math.cos(a)*(2+Math.random()*3), vy: Math.sin(a)*(2+Math.random()*3), life: 1, col });
+  }
+}
+
+// ── 描画 ─────────────────────────────────────────────────────────
+const STRIPE = 48;
+const TRAIN_COLORS = ['#e63946','#457b9d','#f4a261','#2a9d8f','#a8dadc'];
+const TRAIN_LABELS = ['急行','各停','特急','準急','回送'];
+
+function drawRoad() {
+  ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#16213e'; ctx.fillRect(20, 0, W-40, H);
+  // 車線
+  ctx.save();
+  ctx.strokeStyle = '#ffffff18'; ctx.lineWidth = 2;
+  ctx.setLineDash([STRIPE*0.6, STRIPE*0.4]);
+  [125, 235].forEach(x => {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  ctx.restore();
+  // 歩道
+  ctx.fillStyle = '#0f3460';
+  ctx.fillRect(0, 0, 20, H); ctx.fillRect(W-20, 0, 20, H);
+}
+
+function drawTrain(o) {
+  ctx.fillStyle = o.col; rr(o.x-29, o.y-45, 58, 90, 8); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.fillRect(o.x-22, o.y-38, 44, 26);
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(o.x-18, o.y+34, 4, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o.x+18, o.y+34, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(o.label, o.x, o.y+6);
+}
+
+function drawPlayer(p) {
+  // 残像
+  ctx.fillStyle = 'rgba(69,123,157,0.25)';
+  for (let i = 1; i <= 3; i++) { rr(p.x-12+i*2, p.y-24+i*3, 24-i*4, 42-i*5, 4); ctx.fill(); }
+  // 体
+  ctx.fillStyle = '#2b2d42'; rr(p.x-13, p.y-25, 26, 44, 6); ctx.fill();
+  // 頭
+  ctx.fillStyle = '#ffd6a5'; ctx.beginPath(); ctx.arc(p.x, p.y-33, 11, 0, Math.PI*2); ctx.fill();
+  // カバン
+  ctx.fillStyle = '#8d6e63'; rr(p.x+10, p.y-2, 11, 9, 2); ctx.fill();
+}
+
+function drawCoin(c) {
+  const s = 1 + Math.sin(frame*0.15)*0.1;
+  ctx.save(); ctx.translate(c.x, c.y); ctx.scale(s, s);
+  ctx.fillStyle = '#ffd700'; ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('¥', 0, 0);
+  ctx.restore(); ctx.textBaseline = 'alphabetic';
+}
+
+function drawHUD() {
+  // スコア
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('🚃 ' + score, 14, 38);
+  ctx.fillStyle = '#ffd700'; ctx.font = '13px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText('BEST ' + best, W-14, 38);
+  // レーンドット
+  LANES.forEach((lx, i) => {
+    ctx.fillStyle = i === laneIndex ? '#ff3b5c' : 'rgba(255,255,255,0.2)';
+    ctx.beginPath(); ctx.arc(lx, H-20, 5, 0, Math.PI*2); ctx.fill();
+  });
+}
+
+function drawTitle() {
+  // 半透明オーバーレイ
+  ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(0, 0, W, H);
+  // タイトル
+  ctx.save();
+  ctx.shadowColor = '#ff3b5c'; ctx.shadowBlur = 20;
+  ctx.fillStyle = '#ff3b5c'; ctx.font = 'bold 52px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('TOKYO', W/2, H/2 - 80);
+  ctx.fillText('RUSH', W/2, H/2 - 24);
+  ctx.restore();
+  // 説明
+  ctx.fillStyle = '#aaa'; ctx.font = '15px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('電車をかわしてゴールへ！', W/2, H/2 + 20);
+  ctx.fillStyle = '#666'; ctx.font = '13px sans-serif';
+  ctx.fillText('スワイプ / タップ でレーン変更', W/2, H/2 + 46);
+  if (best > 0) {
+    ctx.fillStyle = '#ffd700'; ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('BEST  ' + best, W/2, H/2 + 74);
+  }
+  // ボタン
+  const bx = W/2 - 90, by = H/2 + 100, bw = 180, bh = 54;
+  const grad = ctx.createLinearGradient(bx, by, bx+bw, by+bh);
+  grad.addColorStop(0, '#ff3b5c'); grad.addColorStop(1, '#ff7b3b');
+  ctx.fillStyle = grad; rr(bx, by, bw, bh, 27); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('はじめる', W/2, by + 34);
+}
+
+function drawDead() {
+  ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ff3b5c'; ctx.font = 'bold 36px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', W/2, H/2 - 70);
+  // スコアボックス
+  rr(W/2-100, H/2-40, 200, 80, 12);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fill();
+  ctx.fillStyle = '#888'; ctx.font = '12px sans-serif';
+  ctx.fillText('スコア', W/2, H/2 - 14);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 36px sans-serif';
+  ctx.fillText(score, W/2, H/2 + 28);
+  if (score >= best && score > 0) {
+    ctx.fillStyle = '#ffd700'; ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('🏆 NEW BEST!', W/2, H/2 + 52);
+  } else if (best > 0) {
+    ctx.fillStyle = '#ffd700'; ctx.font = '13px sans-serif';
+    ctx.fillText('ベスト: ' + best, W/2, H/2 + 52);
+  }
+  // ボタン
+  const bx = W/2-90, by = H/2+80, bw = 180, bh = 54;
+  const grad = ctx.createLinearGradient(bx, by, bx+bw, by+bh);
+  grad.addColorStop(0, '#ff3b5c'); grad.addColorStop(1, '#ff7b3b');
+  ctx.fillStyle = grad; rr(bx, by, bw, bh, 27); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 20px sans-serif';
+  ctx.fillText('もう一度', W/2, by + 34);
+}
+
+// ── ゲームループ ──────────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+  ctx.clearRect(0, 0, W, H);
+
+  roadOff = (roadOff + (state === 'play' ? speed : 2)) % STRIPE;
+  drawRoad();
+
+  if (state === 'title') { drawTitle(); return; }
+  if (state === 'dead')  { drawDead();  return; }
+
+  // ── 更新 ──
+  frame++;
+  score = Math.floor(frame / 4);
+  speed = 3.5 + score / 300;
+
+  player.tx = LANES[laneIndex];
+  player.x += (player.tx - player.x) * 0.18;
+
+  // スポーン
+  if (--spawnTimer <= 0) {
+    const li = Math.floor(Math.random() * 3);
+    obstacles.push({ x: LANES[li], y: -50, col: TRAIN_COLORS[frame % TRAIN_COLORS.length], label: TRAIN_LABELS[frame % TRAIN_LABELS.length] });
+    spawnTimer = Math.max(30, 80 - score/20);
+  }
+  if (--coinTimer <= 0) {
+    coins.push({ x: LANES[Math.floor(Math.random()*3)], y: -20 });
+    coinTimer = Math.max(24, 55 - score/25);
+  }
+
+  // 障害物
+  obstacles = obstacles.filter(o => {
+    o.y += speed;
+    drawTrain(o);
+    if (Math.abs(o.x - player.x) < 44 && Math.abs(o.y - player.y) < 60) {
+      particle(player.x, player.y, '#ff3b5c', 12);
+      if (score > best) { best = score; localStorage.setItem('tr_best', best); }
+      state = 'dead';
+    }
+    return o.y < H + 60;
+  });
+
+  // コイン
+  coins = coins.filter(c => {
+    c.y += speed;
+    drawCoin(c);
+    if (Math.hypot(c.x - player.x, c.y - player.y) < 22) {
+      particle(c.x, c.y, '#ffd700', 6);
+      frame += 40;
+      return false;
+    }
+    return c.y < H + 30;
+  });
+
+  // パーティクル
+  particles = particles.filter(p => {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= 0.04;
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+    return p.life > 0;
+  });
+
+  drawPlayer(player);
+  drawHUD();
+}
+
+loop();
+</script>
+</body>
+</html>

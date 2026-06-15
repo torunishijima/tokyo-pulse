@@ -1,5 +1,11 @@
 [build]
+  publish = "."
+  command = ""
   functions = "netlify/functions"
+
+# ネイティブ fetch / AbortSignal.timeout を使うため Node 18+ を指定
+[build.environment]
+  NODE_VERSION = "20"
 
 [[redirects]]
   from = "/api/*"
